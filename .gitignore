@@ -2,3 +2,4 @@
 .codegraph/
 .playwright-mcp/
 .env
+__pycache__/
