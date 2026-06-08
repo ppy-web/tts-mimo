@@ -1,0 +1,24 @@
+services:
+  tts-mimo:
+    build: .
+    container_name: tts-mimo
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # ===== 必填 =====
+      MIMO_API_KEY: ${MIMO_API_KEY:-}
+      # ===== 可选（有默认值） =====
+      MIMO_BASE_URL: ${MIMO_BASE_URL:-https://api.xiaomimimo.com/v1}
+      MIMO_TIMEOUT_SECONDS: ${MIMO_TIMEOUT_SECONDS:-60}
+      TTS_WS_DEFAULT_MODE: ${TTS_WS_DEFAULT_MODE:-preset}
+      TTS_WS_DEFAULT_VOICE: ${TTS_WS_DEFAULT_VOICE:-冰糖}
+      TTS_WS_DEFAULT_STYLE_PROMPT: ${TTS_WS_DEFAULT_STYLE_PROMPT:-温柔自然，语速适中。}
+      TTS_WS_DEFAULT_VOICE_DESIGN_PROMPT: ${TTS_WS_DEFAULT_VOICE_DESIGN_PROMPT:-}
+      TTS_WS_CHUNK_DURATION_MS: ${TTS_WS_CHUNK_DURATION_MS:-120}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

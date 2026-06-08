@@ -72,6 +72,73 @@ uvicorn app.main:app --reload
 - 调试页: `http://127.0.0.1:8000/`
 - OpenAPI: `http://127.0.0.1:8000/docs`
 
+## Docker 部署 / 群晖 NAS
+
+项目支持 Docker 部署，可以轻松运行在群晖 NAS 等任何支持 Docker 的设备上。
+
+### 快速启动
+
+```bash
+# 构建镜像
+docker compose build
+
+# 启动服务（后台运行）
+MIMO_API_KEY=你的密钥 docker compose up -d
+
+# 查看日志
+docker compose logs -f
+
+# 停止服务
+docker compose down
+```
+
+### 群晖 NAS 部署步骤
+
+1. **将项目文件复制到群晖**
+
+   通过 File Station 或 SMB 将整个项目文件夹上传到群晖，例如放到 `/volume1/docker/tts-mimo/`。
+
+2. **创建 `.env` 文件**
+
+   在项目目录下创建 `.env` 文件，填入你的 API Key：
+
+   ```env
+   MIMO_API_KEY=你的小米MiMo API Key
+   ```
+
+3. **SSH 进群晖执行部署**
+
+   开启群晖的 SSH（控制面板 → 终端机和 SNMP → 启用 SSH），然后：
+
+   ```bash
+   ssh 你的用户名@群晖IP
+   cd /volume1/docker/tts-mimo
+   sudo docker compose up -d
+   ```
+
+4. **验证服务**
+
+   浏览器访问 `http://群晖IP:8000/` 即可看到调试页面。
+
+### 群晖 Container Manager（图形界面）
+
+如果不想用命令行，也可以在群晖的 **Container Manager** 中操作：
+
+1. 打开 **Container Manager** → **项目**
+2. 点击 **新建** → 选择 **从 docker-compose.yml 创建**
+3. 设置路径为项目目录，Compose 文件会自动识别
+4. 在 **环境** 中设置 `MIMO_API_KEY` 的值
+5. 点击 **下一步** → **完成**，等待构建和启动
+
+### 自定义端口
+
+默认映射 `8000` 端口。如果端口冲突，修改 `docker-compose.yml` 中的端口映射：
+
+```yaml
+ports:
+  - "9000:8000"  # 改为 9000 或其他可用端口
+```
+
 ## API
 
 ### `GET /api/v1/health`

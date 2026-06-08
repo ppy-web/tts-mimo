@@ -1,5 +1,7 @@
 .venv/
 .codegraph/
 .playwright-mcp/
+.reasonix/
+
 .env
 __pycache__/
