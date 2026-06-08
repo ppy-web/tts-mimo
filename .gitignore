@@ -1,0 +1,4 @@
+.venv/
+.codegraph/
+.playwright-mcp/
+.env

@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Xiaomi MiMo 本地 TTS 工作台</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page-glow page-glow-a"></div>
+    <div class="page-glow page-glow-b"></div>
+
+    <main class="shell">
+      <section class="intro-section">
+        <div class="intro-copy">
+          <p class="eyebrow">Xiaomi MiMo Local Voice Lab</p>
+          <h1>本地 TTS 工作台</h1>
+          <p class="intro">
+            左边组织文本和控制条件，右边立即试听、下载，并确认这次请求到底生成了什么。
+            适合先调声音，再把同样的参数接到你自己的 API 调用里。
+          </p>
+        </div>
+
+        <aside class="intro-panel">
+          <span class="mini-label">工作流</span>
+          <strong>写文本 → 选音色 → 生成 → 试听</strong>
+          <p>
+            网页调试与本地 API
+            使用同一套后端参数映射，避免联调时两边效果不一致。
+          </p>
+        </aside>
+      </section>
+
+      <section class="app-stage">
+        <header class="stage-toolbar">
+          <div class="toolbar-main">
+            <span class="toolbar-kicker">Voice Lab</span>
+            <strong>本地 TTS 工作台</strong>
+          </div>
+          <div class="toolbar-meta">
+            <span id="compact-mode-text">预置音色</span>
+            <span id="compact-voice-text">音色未选择</span>
+            <span id="compact-request-text">空闲</span>
+            <span>FastAPI / WAV</span>
+          </div>
+        </header>
+
+        <section class="workspace">
+          <section class="composer-card">
+            <div class="section-head">
+              <div>
+                <p class="section-kicker">Compose</p>
+                <h2>语音配置</h2>
+              </div>
+              <div class="mode-pill" id="mode-pill">当前：预置音色</div>
+            </div>
+
+            <div class="control-grid">
+              <label class="field">
+                <span>合成模式</span>
+                <select id="mode">
+                  <option value="preset">预置音色</option>
+                  <option value="voice_design">音色设计</option>
+                  <option value="voice_clone">音色复刻</option>
+                </select>
+              </label>
+
+              <label class="field" id="voice-field">
+                <span>预置音色</span>
+                <select id="voice"></select>
+              </label>
+
+              <label class="field hidden" id="voice-design-template-field">
+                <span>音色设计模板</span>
+                <select id="voice-design-template">
+                  <option value="">自定义描述</option>
+                  <option
+                    value="年轻女性，声线清亮、有亲和力，语速自然偏轻快，像播客主持人一样放松但吐字清楚，适合知识讲解和日常介绍。"
+                  >
+                    清亮播客女声
+                  </option>
+                  <option
+                    value="成熟男性，低沉稳重，气息稳定，语速中等偏慢，像纪录片旁白，带一点故事感但不过分夸张。"
+                  >
+                    低沉纪录片男声
+                  </option>
+                  <option
+                    value="专业新闻播报音色，中性偏成熟，吐字标准，节奏平稳，情绪克制，适合公告、新闻和正式说明。"
+                  >
+                    新闻播报
+                  </option>
+                  <option
+                    value="温柔客服女声，亲切、耐心、清晰，语速适中，句尾轻微上扬，听起来可靠且不机械。"
+                  >
+                    温柔客服
+                  </option>
+                  <option
+                    value="年轻男性，声音干净明亮，有少年感，语速略快，语气轻松自然，适合短视频口播和产品介绍。"
+                  >
+                    少年感男声
+                  </option>
+                  <option
+                    value="小说旁白音色，声音有画面感和沉浸感，情绪表达细腻，节奏有起伏，适合剧情、故事和角色独白。"
+                  >
+                    小说旁白
+                  </option>
+                  <option
+                    value="沉稳商务女声，语气自信、清晰、克制，语速中等，适合汇报、课程开场和企业宣传。"
+                  >
+                    商务女声
+                  </option>
+                  <option
+                    value="活泼童声感，明亮、轻快、带好奇心，语调有起伏但保持清楚可懂，适合儿童内容和轻松科普。"
+                  >
+                    童声感
+                  </option>
+                  <option
+                    value="亲切课程讲师音色，声音清楚、耐心、有条理，语速中等偏慢，重点词会自然强调，适合教学和培训。"
+                  >
+                    课程讲师
+                  </option>
+                  <option
+                    value="电台夜谈男声，温暖、低缓、松弛，带轻微气声，语速偏慢，适合情感电台、睡前故事和长篇陪伴内容。"
+                  >
+                    电台夜谈男声
+                  </option>
+                  <option
+                    value="广告口播女声，明亮、有活力，节奏利落，情绪积极但不过分夸张，适合品牌宣传和活动介绍。"
+                  >
+                    广告口播女声
+                  </option>
+                  <option
+                    value="悬疑故事旁白，声线偏低，语速克制，停顿明显，带一点紧张感和神秘感，适合悬疑、案件和氛围叙述。"
+                  >
+                    悬疑旁白
+                  </option>
+                  <option
+                    value="古风说书人音色，成熟、有韵味，语速从容，语调起伏带叙事感，适合历史、武侠和传统故事。"
+                  >
+                    古风说书人
+                  </option>
+                  <option
+                    value="科技产品解说音色，清晰、理性、现代，语速中等偏快，语气专业但不生硬，适合产品演示和技术说明。"
+                  >
+                    科技解说
+                  </option>
+                  <option
+                    value="元气少女音色，明亮、轻快、笑意明显，语速偏快，句尾灵动，适合轻松内容和年轻化短视频。"
+                  >
+                    元气少女
+                  </option>
+                  <option
+                    value="冷静旁白女声，声线干净，情绪克制，语速平稳，带一点高级感，适合展览导览、品牌片和城市宣传。"
+                  >
+                    冷静品牌旁白
+                  </option>
+                </select>
+              </label>
+            </div>
+
+            <p class="mode-hint" id="mode-hint">
+              使用官方预置音色，适合快速验证文本内容与说话风格。
+            </p>
+
+            <label class="field field-large">
+              <div class="field-actions">
+                <span>合成文本</span>
+                <div class="actions">
+                  <button id="submit-button" type="button">生成语音</button>
+                  <a
+                    id="download-link"
+                    class="download disabled"
+                    download="tts-output.wav"
+                    >下载音频</a
+                  >
+                </div>
+              </div>
+              <textarea
+                id="text"
+                rows="10"
+                placeholder="输入你希望模型朗读的正文内容"
+              ></textarea>
+              <div class="field-meta">
+                <span>这段文本会写入上游请求的 assistant 消息中</span>
+                <span id="text-count">0 字</span>
+              </div>
+            </label>
+
+            <label class="field" id="style-prompt-field">
+              <span>风格描述（可选）</span>
+              <textarea
+                id="style-prompt"
+                rows="4"
+                placeholder="例如：温柔、自然、略带笑意，语速适中，像和熟悉的人轻松聊天。"
+              ></textarea>
+            </label>
+
+            <label class="field hidden" id="voice-design-prompt-field">
+              <span>音色设计描述</span>
+              <textarea
+                id="voice-design-prompt"
+                rows="5"
+                placeholder="例如：年轻女性，声线清亮，亲切自然，像播客主持人，吐字利落但不过分播音腔。"
+              ></textarea>
+            </label>
+
+            <label class="field hidden" id="voice-clone-file-field">
+              <span>复刻样本</span>
+              <input id="voice-clone-file" type="file" accept="audio/mpeg,audio/mp3,audio/wav" />
+              <span class="file-meta" id="voice-clone-file-meta">未选择音频样本</span>
+            </label>
+
+            <div class="field">
+              <span>音频标签</span>
+              <div class="tag-grid" id="audio-tag-grid">
+                <button type="button" data-tag="(温柔)">温柔</button>
+                <button type="button" data-tag="[笑]">笑</button>
+                <button type="button" data-tag="[叹气]">叹气</button>
+                <button type="button" data-tag="(四川话)">四川话</button>
+                <button type="button" data-tag="(唱歌)">唱歌</button>
+              </div>
+            </div>
+          </section>
+
+          <aside class="console-card">
+            <div class="section-head section-head-tight">
+              <div>
+                <p class="section-kicker">Result</p>
+                <h2>结果面板</h2>
+              </div>
+              <span class="request-state idle" id="request-state">空闲</span>
+            </div>
+
+            <div class="console-block">
+              <span class="console-label">本次请求摘要</span>
+              <p id="summary" class="summary">尚未发起请求。</p>
+            </div>
+
+            <div class="console-block">
+              <span class="console-label">错误信息</span>
+              <p id="error" class="error" role="alert">当前没有错误。</p>
+            </div>
+
+            <div class="console-block">
+              <span class="console-label">请求预览</span>
+              <pre id="request-preview" class="request-preview">{}</pre>
+            </div>
+
+            <div class="player-shell">
+              <div class="player-head">
+                <span class="console-label">音频回放</span>
+                <span class="player-dot"></span>
+              </div>
+              <audio id="player" controls preload="none"></audio>
+            </div>
+
+            <div class="tips-card">
+              <span class="console-label">调试建议</span>
+              <ul>
+                <li>文本太长时，后端会按标点自动分段合成并合并成一个 WAV。</li>
+                <li>预置音色模式更适合验证内容，音色设计更适合找角色感。</li>
+                <li>下载的音频就是 API 返回的最终 WAV，可直接用于后续流程。</li>
+              </ul>
+            </div>
+          </aside>
+        </section>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

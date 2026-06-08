@@ -1,0 +1,57 @@
+[
+  {
+    "label": "MiMo-默认",
+    "value": "mimo_default",
+    "language": "多语言",
+    "gender": "默认",
+    "note": "因部署集群而异，中国集群默认为冰糖，其他集群默认为 Mia。"
+  },
+  {
+    "label": "冰糖",
+    "value": "冰糖",
+    "language": "中文",
+    "gender": "女性"
+  },
+  {
+    "label": "茉莉",
+    "value": "茉莉",
+    "language": "中文",
+    "gender": "女性"
+  },
+  {
+    "label": "苏打",
+    "value": "苏打",
+    "language": "中文",
+    "gender": "男性"
+  },
+  {
+    "label": "白桦",
+    "value": "白桦",
+    "language": "中文",
+    "gender": "男性"
+  },
+  {
+    "label": "Mia",
+    "value": "Mia",
+    "language": "英文",
+    "gender": "女性"
+  },
+  {
+    "label": "Chloe",
+    "value": "Chloe",
+    "language": "英文",
+    "gender": "女性"
+  },
+  {
+    "label": "Milo",
+    "value": "Milo",
+    "language": "英文",
+    "gender": "男性"
+  },
+  {
+    "label": "Dean",
+    "value": "Dean",
+    "language": "英文",
+    "gender": "男性"
+  }
+]
