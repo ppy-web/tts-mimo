@@ -34,11 +34,18 @@ class HealthResponse(BaseModel):
     mimo_base_url: str
 
 
+class VoiceDesignTemplateItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    value: str
+
+
 class VoicesResponse(BaseModel):
     modes: list[str]
     voices: list[VoiceItem]
     audio_tag_examples: list[str] = Field(default_factory=list)
-    voice_design_templates: list[str] = Field(default_factory=list)
+    voice_design_templates: list[VoiceDesignTemplateItem] = Field(default_factory=list)
 
 
 class SynthesisRequest(BaseModel):

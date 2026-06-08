@@ -199,10 +199,10 @@ async function loadVoices() {
 
   if (Array.isArray(data.voice_design_templates) && data.voice_design_templates.length) {
     voiceDesignTemplate.innerHTML = '<option value="">自定义描述</option>';
-    data.voice_design_templates.forEach((template, index) => {
+    data.voice_design_templates.forEach((template) => {
       const option = document.createElement("option");
-      option.value = template;
-      option.textContent = `模板 ${index + 1}`;
+      option.value = template.value;
+      option.textContent = template.name;
       voiceDesignTemplate.appendChild(option);
     });
   }
