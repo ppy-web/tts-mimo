@@ -26,9 +26,22 @@ const summary = document.getElementById("summary");
 const errorText = document.getElementById("error");
 const requestPreview = document.getElementById("request-preview");
 const streamToggle = document.getElementById("stream-toggle");
+const appModeToggle = document.getElementById("app-mode-toggle");
+const appModeToggleText = document.getElementById("app-mode-toggle-text");
+const appModeIcon = document.querySelector(".app-mode-icon");
+const ttsControls = document.querySelectorAll(".tts-control");
+const asrPanel = document.getElementById("asr-panel");
+const asrLanguage = document.getElementById("asr-language");
+const asrFileInput = document.getElementById("asr-file");
+const asrFileMeta = document.getElementById("asr-file-meta");
+const asrSubmitButton = document.getElementById("asr-submit-button");
+const asrRecordButton = document.getElementById("asr-record-button");
 
 let currentObjectUrl = null;
 let voiceCloneAudio = null;
+let appMode = "tts";
+let asrAudioData = null;
+let asrRecording = null;
 const apiBase = window.location.port === "5500"
   ? `${window.location.protocol}//${window.location.hostname}:8000`
   : "";
@@ -38,6 +51,27 @@ function buildApiUrl(path) {
 }
 
 function updateModeDisplay() {
+  if (appMode === "asr") {
+    ttsControls.forEach((element) => element.classList.add("hidden"));
+    asrPanel.classList.remove("hidden");
+    modePill.textContent = "当前：语音识别";
+    compactModeText.textContent = "语音识别";
+    compactVoiceText.textContent = `语言：${getAsrLanguageLabel()}`;
+    appModeToggle.classList.add("asr-active");
+    appModeToggle.setAttribute("aria-pressed", "true");
+    appModeToggleText.textContent = "语音识别模式";
+    appModeIcon.textContent = "A";
+    updateRequestPreview();
+    return;
+  }
+
+  ttsControls.forEach((element) => element.classList.remove("hidden"));
+  asrPanel.classList.add("hidden");
+  appModeToggle.classList.remove("asr-active");
+  appModeToggle.setAttribute("aria-pressed", "false");
+  appModeToggleText.textContent = "TTS 模式";
+  appModeIcon.textContent = "T";
+
   const mode = modeSelect.value;
   const isPreset = mode === "preset";
   const isVoiceDesign = mode === "voice_design";
@@ -77,6 +111,11 @@ function updateRequestState(state, label) {
 }
 
 function updateCompactVoiceText() {
+  if (appMode === "asr") {
+    compactVoiceText.textContent = `语言：${getAsrLanguageLabel()}`;
+    return;
+  }
+
   const mode = modeSelect.value;
   if (mode === "preset") {
     const selectedOption = voiceSelect.selectedOptions[0];
@@ -111,6 +150,14 @@ function setDownloadUrl(blob) {
   player.src = currentObjectUrl;
 }
 
+function setPlayerPreview(blob) {
+  if (currentObjectUrl) {
+    URL.revokeObjectURL(currentObjectUrl);
+  }
+  currentObjectUrl = URL.createObjectURL(blob);
+  player.src = currentObjectUrl;
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -126,6 +173,14 @@ function getModeLabel(mode) {
     voice_design: "音色设计",
     voice_clone: "音色复刻",
   }[mode] || mode;
+}
+
+function getAsrLanguageLabel() {
+  return {
+    auto: "自动检测",
+    zh: "中文",
+    en: "英文",
+  }[asrLanguage.value] || asrLanguage.value;
 }
 
 function buildPayload({ maskCloneAudio = false } = {}) {
@@ -160,8 +215,20 @@ function buildPayload({ maskCloneAudio = false } = {}) {
   return body;
 }
 
+function buildAsrPayload({ maskAudioData = false } = {}) {
+  return {
+    audio_data: asrAudioData
+      ? (maskAudioData ? "[已选择音频 data URI]" : asrAudioData)
+      : "",
+    language: asrLanguage.value,
+  };
+}
+
 function updateRequestPreview() {
-  requestPreview.textContent = JSON.stringify(buildPayload({ maskCloneAudio: true }), null, 2);
+  const payload = appMode === "asr"
+    ? buildAsrPayload({ maskAudioData: true })
+    : buildPayload({ maskCloneAudio: true });
+  requestPreview.textContent = JSON.stringify(payload, null, 2);
 }
 
 function insertTextAtCursor(input, value) {
@@ -431,7 +498,234 @@ async function synthesizeNonStream() {
   }
 }
 
+async function recognize() {
+  errorText.classList.remove("meta-info");
+  errorText.textContent = "当前没有错误。";
+
+  if (!asrAudioData) {
+    errorText.textContent = "请先选择或录制一段 MP3/WAV 音频。";
+    summary.textContent = "语音识别尚未开始。";
+    updateRequestState("error", "缺少音频");
+    return;
+  }
+
+  const body = buildAsrPayload();
+  asrSubmitButton.disabled = true;
+  asrSubmitButton.textContent = "识别中...";
+  summary.textContent = "请求已发送，正在等待本地服务返回识别文本。";
+  updateRequestState("loading", "识别中");
+  updateRequestPreview();
+
+  try {
+    const response = await fetch(buildApiUrl("/api/v1/speech/recognize"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      let message = "识别失败。";
+      try {
+        const detail = await response.json();
+        if (detail && detail.detail) {
+          message = detail.detail;
+        }
+      } catch {
+        // Ignore JSON parse errors and keep fallback message.
+      }
+      throw new Error(message);
+    }
+
+    const data = await response.json();
+    summary.textContent = data.text || "识别成功，但结果为空。";
+    errorText.classList.add("meta-info");
+    errorText.textContent = formatUsage(data.usage);
+    updateRequestState("success", "已识别");
+  } catch (error) {
+    errorText.classList.remove("meta-info");
+    errorText.textContent = error instanceof Error ? error.message : "发生未知错误。";
+    summary.textContent = "语音识别未成功完成，请检查音频格式或本地服务日志。";
+    updateRequestState("error", "失败");
+  } finally {
+    asrSubmitButton.disabled = false;
+    asrSubmitButton.textContent = "开始识别";
+  }
+}
+
+function formatUsage(usage) {
+  if (!usage || typeof usage !== "object" || !Object.keys(usage).length) {
+    return "Usage：上游未返回用量信息。";
+  }
+
+  const pairs = Object.entries(usage)
+    .filter(([, value]) => value !== null && value !== undefined)
+    .map(([key, value]) => `${key}: ${value}`);
+
+  return pairs.length ? `Usage：${pairs.join("，")}` : "Usage：上游未返回用量信息。";
+}
+
+async function handleAsrFileChange() {
+  const file = asrFileInput.files[0];
+  asrAudioData = null;
+  errorText.classList.remove("meta-info");
+
+  if (!file) {
+    asrFileMeta.textContent = "未选择待识别音频";
+    updateRequestPreview();
+    return;
+  }
+
+  if (file.size > 18 * 1024 * 1024) {
+    asrFileMeta.textContent = "音频过大，建议选择 Base64 后不超过 25 MB 的文件。";
+    updateRequestPreview();
+    return;
+  }
+
+  try {
+    asrAudioData = await readFileAsDataUrl(file);
+    asrFileMeta.textContent = `${file.name} / ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+    setPlayerPreview(file);
+  } catch (error) {
+    asrFileMeta.textContent = error instanceof Error ? error.message : "无法读取待识别音频。";
+  }
+
+  updateRequestPreview();
+}
+
+async function toggleAsrRecording() {
+  if (asrRecording) {
+    await stopAsrRecording();
+    return;
+  }
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    errorText.classList.remove("meta-info");
+    errorText.textContent = "当前浏览器不支持录音，请改为上传音频文件。";
+    return;
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const audioContext = new AudioContextClass();
+    const source = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    const chunks = [];
+
+    processor.onaudioprocess = (event) => {
+      chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    };
+
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+
+    asrRecording = {
+      stream,
+      audioContext,
+      source,
+      processor,
+      chunks,
+      sampleRate: audioContext.sampleRate,
+      startedAt: Date.now(),
+    };
+
+    asrRecordButton.textContent = "停止录音";
+    asrRecordButton.classList.add("recording");
+    asrFileMeta.textContent = "录音中...";
+    updateRequestState("loading", "录音中");
+  } catch (error) {
+    errorText.classList.remove("meta-info");
+    errorText.textContent = error instanceof Error ? error.message : "无法启动浏览器录音。";
+  }
+}
+
+async function stopAsrRecording() {
+  const recording = asrRecording;
+  if (!recording) {
+    return;
+  }
+
+  asrRecording = null;
+  recording.processor.disconnect();
+  recording.source.disconnect();
+  recording.stream.getTracks().forEach((track) => track.stop());
+  await recording.audioContext.close();
+
+  const samples = mergeFloat32Chunks(recording.chunks);
+  const wavBlob = encodeWavBlob(samples, recording.sampleRate);
+  const durationSeconds = Math.max(0.1, (Date.now() - recording.startedAt) / 1000);
+
+  asrAudioData = await readFileAsDataUrl(wavBlob);
+  setPlayerPreview(wavBlob);
+  asrFileInput.value = "";
+  asrFileMeta.textContent = `浏览器录音 / ${durationSeconds.toFixed(1)} 秒 / ${(wavBlob.size / 1024).toFixed(1)} KB`;
+  asrRecordButton.textContent = "开始录音";
+  asrRecordButton.classList.remove("recording");
+  updateRequestState("idle", "待识别");
+  updateRequestPreview();
+}
+
+function mergeFloat32Chunks(chunks) {
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const result = new Float32Array(totalLength);
+  let offset = 0;
+  chunks.forEach((chunk) => {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  });
+  return result;
+}
+
+function encodeWavBlob(samples, sampleRate) {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataLength = samples.length * 2;
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  function writeString(offset, value) {
+    for (let i = 0; i < value.length; i++) {
+      view.setUint8(offset + i, value.charCodeAt(i));
+    }
+  }
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, "data");
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
 modeSelect.addEventListener("change", updateModeDisplay);
+appModeToggle.addEventListener("click", async () => {
+  if (appMode === "asr" && asrRecording) {
+    await stopAsrRecording();
+  }
+  appMode = appMode === "tts" ? "asr" : "tts";
+  errorText.classList.remove("meta-info");
+  updateModeDisplay();
+});
 voiceSelect.addEventListener("change", () => {
   updateCompactVoiceText();
   updateRequestPreview();
@@ -489,6 +783,13 @@ submitButton.addEventListener("click", synthesize);
 if (streamToggle) {
   streamToggle.addEventListener("change", updateRequestPreview);
 }
+asrLanguage.addEventListener("change", () => {
+  updateCompactVoiceText();
+  updateRequestPreview();
+});
+asrFileInput.addEventListener("change", handleAsrFileChange);
+asrSubmitButton.addEventListener("click", recognize);
+asrRecordButton.addEventListener("click", toggleAsrRecording);
 
 loadVoices()
   .then(() => {

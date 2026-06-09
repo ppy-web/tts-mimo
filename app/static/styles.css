@@ -194,6 +194,35 @@ body {
   font-size: 13px;
 }
 
+.app-mode-toggle {
+  min-height: 34px;
+  gap: 8px;
+  padding: 0 11px 0 7px;
+  border-color: rgba(73, 199, 184, 0.42);
+  border-radius: 999px;
+  background: rgba(73, 199, 184, 0.12);
+  color: #dbfff9;
+}
+
+.app-mode-toggle.asr-active {
+  border-color: rgba(255, 179, 92, 0.48);
+  background: rgba(255, 179, 92, 0.12);
+  color: #ffe2c9;
+}
+
+.app-mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font-size: 12px;
+  font-weight: 900;
+}
+
 .workspace {
   /* flex: 1; */
   min-height: 0;
@@ -472,6 +501,18 @@ button:disabled {
   cursor: wait;
 }
 
+.secondary-action {
+  border-color: var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.secondary-action.recording {
+  border-color: rgba(255, 143, 143, 0.55);
+  background: rgba(255, 143, 143, 0.14);
+  color: #ffd9d9;
+}
+
 .download {
   border: 1px solid var(--line);
   background: var(--panel-2);
@@ -544,6 +585,23 @@ button:disabled {
 
 .error {
   color: var(--danger);
+}
+
+.error.meta-info {
+  color: var(--muted);
+}
+
+.asr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.asr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .player-head {

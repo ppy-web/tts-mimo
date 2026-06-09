@@ -3,6 +3,8 @@ from enum import Enum
 import base64
 import re
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -16,6 +18,8 @@ VOICE_CLONE_DATA_URI_PATTERN = re.compile(
     r"^data:(audio/(?:mpeg|mp3|wav));base64,([A-Za-z0-9+/=\s]+)$"
 )
 VOICE_CLONE_BASE64_MAX_BYTES = 10 * 1024 * 1024
+ASR_AUDIO_DATA_URI_PATTERN = VOICE_CLONE_DATA_URI_PATTERN
+ASR_AUDIO_BASE64_MAX_BYTES = 25 * 1024 * 1024
 
 
 class VoiceItem(BaseModel):
@@ -95,3 +99,61 @@ class SynthesisRequest(BaseModel):
         if self.mode == SynthesisMode.VOICE_CLONE and not self.voice_clone_audio:
             raise ValueError("voice_clone 模式必须提供 voice_clone_audio。")
         return self
+
+
+class AsrRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    audio_data: str = Field(
+        description="待识别音频，格式为 data:audio/{mpeg|mp3|wav};base64,...",
+    )
+    language: str = Field(default="auto", max_length=32)
+
+    @field_validator("audio_data")
+    @classmethod
+    def validate_audio_data(cls, value: str) -> str:
+        match = ASR_AUDIO_DATA_URI_PATTERN.match(value)
+        if match is None:
+            raise ValueError(
+                "audio_data 必须是 data:audio/mpeg;base64,...、"
+                "data:audio/mp3;base64,... 或 data:audio/wav;base64,... 格式。"
+            )
+
+        base64_payload = re.sub(r"\s+", "", match.group(2))
+        if len(base64_payload.encode("ascii")) > ASR_AUDIO_BASE64_MAX_BYTES:
+            raise ValueError("audio_data 的 Base64 内容不能超过 25 MB。")
+
+        try:
+            base64.b64decode(base64_payload, validate=True)
+        except ValueError as exc:
+            raise ValueError("audio_data 包含无效的 Base64 内容。") from exc
+
+        return f"data:{match.group(1)};base64,{base64_payload}"
+
+    @field_validator("language")
+    @classmethod
+    def normalize_language(cls, value: str) -> str:
+        language = value.strip().lower() or "auto"
+        allowed = {"auto", "zh", "en", "zh-cn", "zh_cn", "chinese", "english"}
+        if language not in allowed:
+            raise ValueError("language 仅支持 auto、zh 或 en。")
+        if language in {"zh-cn", "zh_cn", "chinese"}:
+            return "zh"
+        if language == "english":
+            return "en"
+        return language
+
+
+class AsrUsage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    seconds: float | None = None
+    audio_tokens: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+class AsrResponse(BaseModel):
+    text: str
+    usage: AsrUsage | dict[str, Any] = Field(default_factory=AsrUsage)

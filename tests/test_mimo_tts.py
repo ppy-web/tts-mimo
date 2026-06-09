@@ -11,7 +11,8 @@ import app.config as app_config
 import app.main as app_main
 from app.config import Settings
 from app.main import create_app
-from app.schemas import SynthesisMode, SynthesisRequest
+from app.schemas import AsrRequest, SynthesisMode, SynthesisRequest
+from app.services.mimo_asr import MimoAsrError, MimoAsrService
 from app.services.mimo_tts import MimoTtsError, MimoTtsService
 
 
@@ -29,6 +30,10 @@ def make_settings(**overrides) -> Settings:
 
 def make_service(transport: httpx.AsyncBaseTransport | None = None, **settings_overrides) -> MimoTtsService:
     return MimoTtsService(make_settings(**settings_overrides), transport=transport)
+
+
+def make_asr_service(transport: httpx.AsyncBaseTransport | None = None, **settings_overrides) -> MimoAsrService:
+    return MimoAsrService(make_settings(**settings_overrides), transport=transport)
 
 
 def make_test_wav_bytes(
@@ -117,6 +122,49 @@ def test_voice_clone_audio_normalizes_base64_whitespace() -> None:
     )
 
     assert payload.voice_clone_audio == "data:audio/mp3;base64,UklGRg=="
+
+
+def test_asr_request_normalizes_audio_data_and_language() -> None:
+    payload = AsrRequest(
+        audio_data="data:audio/wav;base64,UklG\nRg==",
+        language="zh-CN",
+    )
+
+    assert payload.audio_data == "data:audio/wav;base64,UklGRg=="
+    assert payload.language == "zh"
+
+
+def test_asr_request_rejects_invalid_audio_data() -> None:
+    with pytest.raises(ValueError, match="audio_data"):
+        AsrRequest(audio_data="UklGRg==")
+
+
+def test_asr_build_payload() -> None:
+    service = make_asr_service()
+    payload = AsrRequest(audio_data="data:audio/wav;base64,UklGRg==", language="auto")
+
+    request_body = service.build_payload(payload)
+
+    assert request_body["model"] == "mimo-v2.5-asr"
+    assert request_body["asr_options"] == {"language": "auto"}
+    assert request_body["messages"][0]["role"] == "user"
+    content = request_body["messages"][0]["content"][0]
+    assert content["type"] == "input_audio"
+    assert content["input_audio"]["data"] == "data:audio/wav;base64,UklGRg=="
+
+
+def test_asr_extract_text() -> None:
+    upstream_payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": "你好，欢迎使用。",
+                }
+            }
+        ]
+    }
+
+    assert MimoAsrService.extract_text(upstream_payload) == "你好，欢迎使用。"
 
 
 def test_decode_audio_bytes() -> None:
@@ -243,6 +291,54 @@ def test_synthesize_endpoint_validation_error() -> None:
     assert response.status_code == 422
 
 
+def test_asr_endpoint_returns_text_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode("utf-8"))
+        assert body["model"] == "mimo-v2.5-asr"
+        assert body["asr_options"]["language"] == "zh"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "本地端点测试。"}}],
+                "usage": {"seconds": 2.0, "audio_tokens": 88},
+            },
+        )
+
+    mock_transport = httpx.MockTransport(handler)
+    original_init = MimoAsrService.__init__
+
+    def patched_init(self, settings, transport=None):
+        original_init(self, settings, transport=mock_transport)
+
+    app_config.get_settings.cache_clear()
+    monkeypatch.setattr(app_main, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(MimoAsrService, "__init__", patched_init)
+    app = create_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/speech/recognize",
+            json={
+                "audio_data": "data:audio/wav;base64,UklGRg==",
+                "language": "zh",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "text": "本地端点测试。",
+        "usage": {
+            "seconds": 2.0,
+            "audio_tokens": 88,
+            "input_tokens": None,
+            "output_tokens": None,
+            "total_tokens": None,
+        },
+    }
+
+    app_config.get_settings.cache_clear()
+
+
 @pytest.mark.anyio
 async def test_synthesize_success_with_mock_transport() -> None:
     raw_audio = b"RIFFfakewav"
@@ -273,6 +369,57 @@ async def test_synthesize_success_with_mock_transport() -> None:
     result = await service.synthesize(payload)
 
     assert result == raw_audio
+
+
+@pytest.mark.anyio
+async def test_asr_recognize_success_with_mock_transport() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == httpx.URL("https://api.xiaomimimo.com/v1/chat/completions")
+        body = json.loads(request.read().decode("utf-8"))
+        assert body["model"] == "mimo-v2.5-asr"
+        assert body["asr_options"] == {"language": "auto"}
+        assert body["messages"][0]["content"][0]["type"] == "input_audio"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "识别结果。",
+                        }
+                    }
+                ],
+                "usage": {
+                    "seconds": 1.2,
+                    "audio_tokens": 42,
+                },
+            },
+        )
+
+    service = make_asr_service(transport=httpx.MockTransport(handler))
+
+    result = await service.recognize("data:audio/wav;base64,UklGRg==", "auto")
+
+    assert result == {
+        "text": "识别结果。",
+        "usage": {
+            "seconds": 1.2,
+            "audio_tokens": 42,
+        },
+    }
+
+
+@pytest.mark.anyio
+async def test_asr_recognize_maps_upstream_error_to_exception() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "invalid api key"}})
+
+    service = make_asr_service(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(MimoAsrError) as exc_info:
+        await service.recognize("data:audio/wav;base64,UklGRg==", "auto")
+
+    assert "invalid api key" in str(exc_info.value)
 
 
 @pytest.mark.anyio

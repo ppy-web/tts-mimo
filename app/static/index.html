@@ -38,6 +38,16 @@
             <strong>本地 TTS 工作台</strong>
           </div>
           <div class="toolbar-meta">
+            <button
+              id="app-mode-toggle"
+              class="app-mode-toggle"
+              type="button"
+              aria-pressed="false"
+              title="切换 TTS / ASR"
+            >
+              <span class="app-mode-icon" aria-hidden="true">T</span>
+              <span id="app-mode-toggle-text">TTS 模式</span>
+            </button>
             <span id="compact-mode-text">预置音色</span>
             <span id="compact-voice-text">音色未选择</span>
             <span id="compact-request-text">空闲</span>
@@ -55,7 +65,7 @@
               <div class="mode-pill" id="mode-pill">当前：预置音色</div>
             </div>
 
-            <div class="control-grid">
+            <div class="control-grid tts-control">
               <label class="field">
                 <span>合成模式</span>
                 <select id="mode">
@@ -168,11 +178,11 @@
               </label>
             </div>
 
-            <p class="mode-hint" id="mode-hint">
+            <p class="mode-hint tts-control" id="mode-hint">
               使用官方预置音色，适合快速验证文本内容与说话风格。
             </p>
 
-            <label class="field field-large">
+            <label class="field field-large tts-control">
               <div class="field-actions">
                 <span>合成文本</span>
                 <div class="actions">
@@ -196,7 +206,7 @@
               </div>
             </label>
 
-            <label class="field" id="style-prompt-field">
+            <label class="field tts-control" id="style-prompt-field">
               <span>风格描述（可选）</span>
               <textarea
                 id="style-prompt"
@@ -205,7 +215,7 @@
               ></textarea>
             </label>
 
-            <label class="field hidden" id="voice-design-prompt-field">
+            <label class="field hidden tts-control" id="voice-design-prompt-field">
               <span>音色设计描述</span>
               <textarea
                 id="voice-design-prompt"
@@ -214,13 +224,13 @@
               ></textarea>
             </label>
 
-            <label class="field hidden" id="voice-clone-file-field">
+            <label class="field hidden tts-control" id="voice-clone-file-field">
               <span>复刻样本</span>
               <input id="voice-clone-file" type="file" accept="audio/mpeg,audio/mp3,audio/wav" />
               <span class="file-meta" id="voice-clone-file-meta">未选择音频样本</span>
             </label>
 
-            <div class="field">
+            <div class="field tts-control">
               <span>音频标签</span>
               <div class="tag-grid" id="audio-tag-grid">
                 <button type="button" data-tag="(温柔)">温柔</button>
@@ -231,7 +241,7 @@
               </div>
             </div>
 
-            <label class="field stream-toggle-field" for="stream-toggle">
+            <label class="field stream-toggle-field tts-control" for="stream-toggle">
               <input id="stream-toggle" type="checkbox" />
               <span class="stream-toggle-copy">
                 <span class="stream-toggle-title">流式输出（SSE）</span>
@@ -241,6 +251,33 @@
                 <span class="stream-switch-thumb"></span>
               </span>
             </label>
+
+            <div class="asr-panel hidden" id="asr-panel">
+              <div class="control-grid">
+                <label class="field">
+                  <span>识别语言</span>
+                  <select id="asr-language">
+                    <option value="auto">自动检测</option>
+                    <option value="zh">中文</option>
+                    <option value="en">英文</option>
+                  </select>
+                </label>
+
+                <label class="field" id="asr-file-field">
+                  <span>音频文件</span>
+                  <input id="asr-file" type="file" accept="audio/mpeg,audio/mp3,audio/wav" />
+                  <span class="file-meta" id="asr-file-meta">未选择待识别音频</span>
+                </label>
+              </div>
+
+              <div class="asr-actions">
+                <button id="asr-submit-button" type="button">开始识别</button>
+                <button id="asr-record-button" type="button" class="secondary-action">开始录音</button>
+              </div>
+              <p class="mode-hint" id="asr-hint">
+                上传 MP3/WAV，或用浏览器录音后识别。识别文本会显示在右侧结果摘要中。
+              </p>
+            </div>
           </section>
 
           <aside class="console-card">

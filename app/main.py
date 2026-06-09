@@ -12,7 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from app.config import get_settings
-from app.schemas import HealthResponse, SynthesisRequest, VoicesResponse
+from app.schemas import AsrRequest, AsrResponse, HealthResponse, SynthesisRequest, VoicesResponse
+from app.services.mimo_asr import MimoAsrError, MimoAsrService
 from app.services.mimo_tts import MimoTtsError, MimoTtsService
 
 
@@ -155,6 +156,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.settings = settings
     app.state.mimo_tts = MimoTtsService(settings)
+    app.state.mimo_asr = MimoAsrService(settings)
     yield
 
 
@@ -233,6 +235,23 @@ def create_app() -> FastAPI:
 
         headers = service.build_download_headers()
         return Response(content=audio_bytes, media_type="audio/wav", headers=headers)
+
+    @app.post(
+        "/api/v1/speech/recognize",
+        response_model=AsrResponse,
+        responses={
+            502: {"description": "上游 ASR 服务失败"},
+        },
+    )
+    async def recognize(payload: AsrRequest) -> AsrResponse:
+        service: MimoAsrService = app.state.mimo_asr
+
+        try:
+            result = await service.recognize(payload.audio_data, payload.language)
+        except MimoAsrError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        return AsrResponse.model_validate(result)
 
     async def _handle_stream_synthesis(
         service: MimoTtsService,
