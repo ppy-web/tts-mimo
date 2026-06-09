@@ -4,7 +4,7 @@ import json
 import wave
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, AsyncIterator, Iterator
 
 import httpx
 
@@ -24,6 +24,8 @@ class MimoTtsService:
     SOFT_TEXT_BOUNDARIES = "，,、：: "
     CLOSING_QUOTES = "\"'”’）)]】》"
 
+    STREAM_PCM16_SAMPLE_RATE = 24000
+
     def __init__(
         self,
         settings: Settings,
@@ -42,7 +44,9 @@ class MimoTtsService:
         if voice not in self._voice_values:
             raise MimoTtsError(f"不支持的预置音色: {voice}")
 
-    def build_payload(self, payload: SynthesisRequest) -> dict[str, Any]:
+    def build_payload(self, payload: SynthesisRequest, *, stream: bool = False) -> dict[str, Any]:
+        audio_format = "pcm16" if stream else "wav"
+
         if payload.mode == SynthesisMode.PRESET:
             if payload.voice is None:
                 raise MimoTtsError("preset 模式缺少 voice。")
@@ -51,23 +55,29 @@ class MimoTtsService:
             if payload.style_prompt:
                 messages.append({"role": "user", "content": payload.style_prompt})
             messages.append({"role": "assistant", "content": payload.text})
-            return {
+            body: dict[str, Any] = {
                 "model": self.PRESET_MODEL,
                 "messages": messages,
-                "audio": {"format": "wav", "voice": payload.voice},
+                "audio": {"format": audio_format, "voice": payload.voice},
             }
+            if stream:
+                body["stream"] = True
+            return body
 
         if payload.mode == SynthesisMode.VOICE_DESIGN:
             if payload.voice_design_prompt is None:
                 raise MimoTtsError("voice_design 模式缺少 voice_design_prompt。")
-            return {
+            body = {
                 "model": self.VOICE_DESIGN_MODEL,
                 "messages": [
                     {"role": "user", "content": payload.voice_design_prompt},
                     {"role": "assistant", "content": payload.text},
                 ],
-                "audio": {"format": "wav"},
+                "audio": {"format": audio_format},
             }
+            if stream:
+                body["stream"] = True
+            return body
 
         if payload.mode != SynthesisMode.VOICE_CLONE:
             raise MimoTtsError(f"不支持的合成模式: {payload.mode}")
@@ -77,11 +87,14 @@ class MimoTtsService:
         if payload.style_prompt:
             messages.append({"role": "user", "content": payload.style_prompt})
         messages.append({"role": "assistant", "content": payload.text})
-        return {
+        body = {
             "model": self.VOICE_CLONE_MODEL,
             "messages": messages,
-            "audio": {"format": "wav", "voice": payload.voice_clone_audio},
+            "audio": {"format": audio_format, "voice": payload.voice_clone_audio},
         }
+        if stream:
+            body["stream"] = True
+        return body
 
     async def synthesize(self, payload: SynthesisRequest) -> bytes:
         if not self.settings.has_api_key:
@@ -103,6 +116,136 @@ class MimoTtsService:
             wav_segments,
             pause_ms=self.settings.tts_segment_pause_ms,
         )
+
+    async def synthesize_stream(self, payload: SynthesisRequest) -> AsyncIterator[bytes]:
+        """Yield raw PCM16 chunks (24kHz mono) from upstream SSE streaming."""
+        if not self.settings.has_api_key:
+            raise MimoTtsError("未配置 MIMO_API_KEY。")
+
+        text_segments = self.split_synthesis_text(
+            payload.text,
+            self.settings.tts_segment_max_chars,
+        )
+        if not text_segments:
+            return
+
+        silence_pcm = self._generate_silence_pcm(
+            self.settings.tts_segment_pause_ms,
+            sample_rate=self.STREAM_PCM16_SAMPLE_RATE,
+        )
+
+        for index, text_segment in enumerate(text_segments):
+            if index > 0 and silence_pcm:
+                yield silence_pcm
+            segment_payload = payload.model_copy(update={"text": text_segment})
+            async for chunk in self._synthesize_single_stream(segment_payload):
+                yield chunk
+
+    async def _synthesize_single_stream(self, payload: SynthesisRequest) -> AsyncIterator[bytes]:
+        """Stream a single text segment via SSE, yielding decoded PCM16 bytes."""
+        request_body = self.build_payload(payload, stream=True)
+        base_url = self.settings.mimo_base_url.rstrip("/")
+        url = f"{base_url}/chat/completions"
+
+        headers = {
+            "api-key": self.settings.mimo_api_key,
+            "Content-Type": "application/json",
+        }
+
+        timeout = httpx.Timeout(self.settings.mimo_timeout_seconds)
+        async with httpx.AsyncClient(timeout=timeout, transport=self._transport) as client:
+            try:
+                async with client.stream(
+                    "POST", url, headers=headers, json=request_body,
+                ) as response:
+                    if response.status_code >= 400:
+                        body_bytes = await response.aread()
+                        detail = self._extract_error_detail_from_bytes(body_bytes, response.status_code)
+                        raise MimoTtsError(f"小米语音服务返回错误: {detail}")
+
+                    async for line in response.aiter_lines():
+                        line = line.strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data_str = line[len("data:"):].strip()
+                        if data_str == "[DONE]":
+                            return
+                        try:
+                            chunk_data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        audio_b64 = self._extract_stream_audio_data(chunk_data)
+                        if audio_b64 is None:
+                            continue
+                        try:
+                            pcm_bytes = base64.b64decode(audio_b64)
+                        except (ValueError, TypeError):
+                            continue
+                        if pcm_bytes:
+                            yield pcm_bytes
+
+            except httpx.TimeoutException as exc:
+                raise MimoTtsError("请求小米语音服务超时。") from exc
+            except httpx.HTTPError as exc:
+                raise MimoTtsError("请求小米语音服务失败。") from exc
+
+    @staticmethod
+    def _extract_stream_audio_data(chunk_data: dict[str, Any]) -> str | None:
+        """Extract the base64 audio data string from a streaming SSE chunk."""
+        try:
+            delta = chunk_data["choices"][0]["delta"]
+            audio = delta.get("audio")
+            if isinstance(audio, dict):
+                data = audio.get("data")
+                if isinstance(data, str) and data:
+                    return data
+        except (KeyError, IndexError, TypeError):
+            pass
+        return None
+
+    @staticmethod
+    def _generate_silence_pcm(
+        pause_ms: int,
+        sample_rate: int = 24000,
+        sample_width: int = 2,
+        channels: int = 1,
+    ) -> bytes:
+        """Generate silence PCM bytes for inter-segment pauses."""
+        if pause_ms <= 0:
+            return b""
+        num_frames = round(sample_rate * pause_ms / 1000)
+        return b"\x00" * num_frames * channels * sample_width
+
+    def _build_headers(self) -> dict[str, str]:
+        return {
+            "api-key": self.settings.mimo_api_key,
+            "Content-Type": "application/json",
+        }
+
+    def _build_request_url(self) -> str:
+        base_url = self.settings.mimo_base_url.rstrip("/")
+        return f"{base_url}/chat/completions"
+
+    def _extract_error_detail_from_bytes(self, body_bytes: bytes, status_code: int) -> str:
+        try:
+            payload = json.loads(body_bytes)
+        except json.JSONDecodeError:
+            text = body_bytes.decode("utf-8", errors="replace").strip()
+            return text or f"HTTP {status_code}"
+
+        if isinstance(payload, dict):
+            if isinstance(payload.get("error"), dict):
+                message = payload["error"].get("message")
+                if message:
+                    return str(message)
+            detail = payload.get("detail")
+            if detail:
+                return str(detail)
+            message = payload.get("message")
+            if message:
+                return str(message)
+        return f"HTTP {status_code}"
 
     async def _synthesize_single(self, payload: SynthesisRequest) -> bytes:
         request_body = self.build_payload(payload)

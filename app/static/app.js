@@ -25,6 +25,7 @@ const player = document.getElementById("player");
 const summary = document.getElementById("summary");
 const errorText = document.getElementById("error");
 const requestPreview = document.getElementById("request-preview");
+const streamToggle = document.getElementById("stream-toggle");
 
 let currentObjectUrl = null;
 let voiceCloneAudio = null;
@@ -134,6 +135,10 @@ function buildPayload({ maskCloneAudio = false } = {}) {
     text: textInput.value.trim(),
   };
 
+  if (streamToggle && streamToggle.checked) {
+    body.stream = true;
+  }
+
   if (mode === "preset") {
     body.voice = voiceSelect.value;
     const stylePrompt = stylePromptInput.value.trim();
@@ -209,6 +214,173 @@ async function loadVoices() {
 }
 
 async function synthesize() {
+  if (streamToggle && streamToggle.checked) {
+    return synthesizeStream();
+  }
+  return synthesizeNonStream();
+}
+
+async function synthesizeStream() {
+  errorText.textContent = "当前没有错误。";
+
+  const mode = modeSelect.value;
+  const body = buildPayload();
+
+  submitButton.disabled = true;
+  submitButton.textContent = "流式生成中...";
+  summary.textContent = "SSE 流式请求已发送，正在逐步接收并播放音频。";
+  updateRequestState("loading", "流式生成中");
+  resetDownload();
+
+  let audioCtx = null;
+  let playbackTime = 0;
+  let totalBytes = 0;
+  let chunkCount = 0;
+  let aborted = false;
+
+  try {
+    const response = await fetch(buildApiUrl("/api/v1/speech/synthesize"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      let message = "生成失败。";
+      try {
+        const detail = await response.json();
+        if (detail && detail.detail) {
+          message = detail.detail;
+        }
+      } catch { /* ignore */ }
+      throw new Error(message);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuffer = "";
+    const allPcmChunks = [];
+
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+    playbackTime = audioCtx.currentTime + 0.1;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      sseBuffer += decoder.decode(value, { stream: true });
+      const lines = sseBuffer.split("\n");
+      sseBuffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const dataStr = trimmed.slice(5).trim();
+
+        if (dataStr === "[DONE]") {
+          continue;
+        }
+
+        let parsed;
+        try {
+          parsed = JSON.parse(dataStr);
+        } catch {
+          continue;
+        }
+
+        if (parsed.error) {
+          throw new Error(parsed.error);
+        }
+
+        if (parsed.audio) {
+          const raw = atob(parsed.audio);
+          const pcmBytes = new Uint8Array(raw.length);
+          for (let i = 0; i < raw.length; i++) {
+            pcmBytes[i] = raw.charCodeAt(i);
+          }
+          allPcmChunks.push(pcmBytes);
+          totalBytes += pcmBytes.length;
+          chunkCount++;
+
+          const int16 = new Int16Array(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.length / 2);
+          const float32 = new Float32Array(int16.length);
+          for (let i = 0; i < int16.length; i++) {
+            float32[i] = int16[i] / 32768.0;
+          }
+
+          const audioBuffer = audioCtx.createBuffer(1, float32.length, 24000);
+          audioBuffer.getChannelData(0).set(float32);
+          const source = audioCtx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioCtx.destination);
+          source.start(playbackTime);
+          playbackTime += audioBuffer.duration;
+
+          summary.textContent = `流式接收中：${chunkCount} 个数据块，共 ${(totalBytes / 1024).toFixed(1)} KB。`;
+        }
+      }
+    }
+
+    // Build WAV for download from collected chunks
+    const totalLength = allPcmChunks.reduce((sum, c) => sum + c.length, 0);
+    const merged = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of allPcmChunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    const wavBlob = pcm16ToWavBlob(merged, 24000);
+    setDownloadUrl(wavBlob);
+
+    summary.textContent = `流式生成成功：${getModeLabel(mode)} 模式，${chunkCount} 个数据块，音频大小 ${(totalBytes / 1024).toFixed(1)} KB。`;
+    errorText.textContent = "当前没有错误。";
+    updateRequestState("success", "已完成");
+  } catch (error) {
+    if (audioCtx) {
+      try { audioCtx.close(); } catch { /* ignore */ }
+    }
+    errorText.textContent = error instanceof Error ? error.message : "发生未知错误。";
+    summary.textContent = "流式请求未成功完成，请检查输入参数或本地服务日志。";
+    updateRequestState("error", "失败");
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = "生成语音";
+  }
+}
+
+function pcm16ToWavBlob(pcmData, sampleRate) {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const wavHeaderSize = 44;
+  const buffer = new ArrayBuffer(wavHeaderSize + pcmData.length);
+  const view = new DataView(buffer);
+
+  function writeString(offset, str) {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  }
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + pcmData.length, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, "data");
+  view.setUint32(40, pcmData.length, true);
+  new Uint8Array(buffer, wavHeaderSize).set(pcmData);
+
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function synthesizeNonStream() {
   errorText.textContent = "当前没有错误。";
 
   const mode = modeSelect.value;
@@ -314,6 +486,9 @@ textInput.addEventListener("input", () => {
   updateRequestPreview();
 });
 submitButton.addEventListener("click", synthesize);
+if (streamToggle) {
+  streamToggle.addEventListener("change", updateRequestPreview);
+}
 
 loadVoices()
   .then(() => {

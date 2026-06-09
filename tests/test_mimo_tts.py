@@ -340,17 +340,17 @@ async def test_synthesize_maps_upstream_error_to_exception() -> None:
 
 
 def test_websocket_synthesize_returns_pcm_stream(monkeypatch: pytest.MonkeyPatch) -> None:
-    wav_bytes = make_test_wav_bytes(sample_rate=8000, channels=1, frame_count=400)
+    pcm_data = b"\x01\x02\x03\x04" * 100  # some PCM data
 
-    async def fake_synthesize(self, payload: SynthesisRequest) -> bytes:
+    async def fake_synthesize_stream(self, payload: SynthesisRequest):
         assert payload.mode == SynthesisMode.PRESET
         assert payload.voice == "冰糖"
         assert payload.text == "你好，本地流式测试。"
-        return wav_bytes
+        yield pcm_data
 
     app_config.get_settings.cache_clear()
     monkeypatch.setattr(app_main, "get_settings", lambda: make_settings())
-    monkeypatch.setattr(MimoTtsService, "synthesize", fake_synthesize)
+    monkeypatch.setattr(MimoTtsService, "synthesize_stream", fake_synthesize_stream)
     app = create_app()
 
     with TestClient(app) as client:
@@ -362,25 +362,24 @@ def test_websocket_synthesize_returns_pcm_stream(monkeypatch: pytest.MonkeyPatch
 
             audio_chunk = websocket.receive_bytes()
             assert audio_chunk
-            assert len(audio_chunk) == 1600
 
     app_config.get_settings.cache_clear()
 
 
 def test_websocket_synthesize_accepts_voice_clone_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    wav_bytes = make_test_wav_bytes(sample_rate=8000, channels=1, frame_count=200)
+    pcm_data = b"\x01\x02\x03\x04" * 50
     sample = "data:audio/wav;base64,UklGRg=="
 
-    async def fake_synthesize(self, payload: SynthesisRequest) -> bytes:
+    async def fake_synthesize_stream(self, payload: SynthesisRequest):
         assert payload.mode == SynthesisMode.VOICE_CLONE
         assert payload.voice_clone_audio == sample
         assert payload.style_prompt == "自然清晰。"
         assert payload.text == "复刻音色测试。"
-        return wav_bytes
+        yield pcm_data
 
     app_config.get_settings.cache_clear()
     monkeypatch.setattr(app_main, "get_settings", lambda: make_settings())
-    monkeypatch.setattr(MimoTtsService, "synthesize", fake_synthesize)
+    monkeypatch.setattr(MimoTtsService, "synthesize_stream", fake_synthesize_stream)
     app = create_app()
 
     with TestClient(app) as client:
@@ -400,5 +399,277 @@ def test_websocket_synthesize_accepts_voice_clone_json(monkeypatch: pytest.Monke
 
             audio_chunk = websocket.receive_bytes()
             assert audio_chunk
+
+    app_config.get_settings.cache_clear()
+
+
+# ─── Streaming / SSE tests ─────────────────────────────────────────
+
+
+def test_build_payload_stream_for_preset_mode() -> None:
+    service = make_service()
+    payload = SynthesisRequest(
+        mode=SynthesisMode.PRESET,
+        text="你好，欢迎使用。",
+        voice="冰糖",
+        style_prompt="温柔自然，语速适中。",
+    )
+
+    request_body = service.build_payload(payload, stream=True)
+
+    assert request_body["model"] == "mimo-v2.5-tts"
+    assert request_body["audio"] == {"format": "pcm16", "voice": "冰糖"}
+    assert request_body["stream"] is True
+    assert request_body["messages"][0] == {"role": "user", "content": "温柔自然，语速适中。"}
+    assert request_body["messages"][1] == {"role": "assistant", "content": "你好，欢迎使用。"}
+
+
+def test_build_payload_stream_for_voice_design_mode() -> None:
+    service = make_service()
+    payload = SynthesisRequest(
+        mode=SynthesisMode.VOICE_DESIGN,
+        text="请收听今天的节目。",
+        voice_design_prompt="年轻男声，明亮、清晰、节奏轻快。",
+    )
+
+    request_body = service.build_payload(payload, stream=True)
+
+    assert request_body["model"] == "mimo-v2.5-tts-voicedesign"
+    assert request_body["audio"] == {"format": "pcm16"}
+    assert request_body["stream"] is True
+
+
+def test_build_payload_stream_for_voice_clone_mode() -> None:
+    service = make_service()
+    sample = "data:audio/wav;base64,UklGRg=="
+    payload = SynthesisRequest(
+        mode=SynthesisMode.VOICE_CLONE,
+        text="复刻测试。",
+        voice_clone_audio=sample,
+    )
+
+    request_body = service.build_payload(payload, stream=True)
+
+    assert request_body["model"] == "mimo-v2.5-tts-voiceclone"
+    assert request_body["audio"] == {"format": "pcm16", "voice": sample}
+    assert request_body["stream"] is True
+
+
+def test_build_payload_no_stream_has_no_stream_key() -> None:
+    service = make_service()
+    payload = SynthesisRequest(mode="preset", text="你好", voice="冰糖")
+
+    request_body = service.build_payload(payload, stream=False)
+
+    assert "stream" not in request_body
+    assert request_body["audio"]["format"] == "wav"
+
+
+def test_extract_stream_audio_data() -> None:
+    pcm_b64 = base64.b64encode(b"\x01\x02\x03\x04").decode()
+    chunk = {
+        "choices": [
+            {
+                "delta": {
+                    "audio": {"data": pcm_b64},
+                }
+            }
+        ]
+    }
+    result = MimoTtsService._extract_stream_audio_data(chunk)
+    assert result == pcm_b64
+
+
+def test_extract_stream_audio_data_returns_none_for_missing() -> None:
+    assert MimoTtsService._extract_stream_audio_data({}) is None
+    assert MimoTtsService._extract_stream_audio_data({"choices": []}) is None
+    assert MimoTtsService._extract_stream_audio_data(
+        {"choices": [{"delta": {}}]}
+    ) is None
+    assert MimoTtsService._extract_stream_audio_data(
+        {"choices": [{"delta": {"audio": None}}]}
+    ) is None
+
+
+def test_generate_silence_pcm() -> None:
+    silence = MimoTtsService._generate_silence_pcm(100, sample_rate=24000)
+    assert len(silence) == 24000 * 2 // 10  # 100ms at 24kHz, 16-bit
+    assert silence == b"\x00" * len(silence)
+
+
+def test_generate_silence_pcm_zero_returns_empty() -> None:
+    assert MimoTtsService._generate_silence_pcm(0) == b""
+
+
+def _make_sse_chunk(pcm_bytes: bytes) -> str:
+    """Build a single SSE data line for a streaming audio chunk."""
+    chunk = {"choices": [{"delta": {"audio": {"data": base64.b64encode(pcm_bytes).decode()}}}]}
+    return "data: " + json.dumps(chunk)
+
+
+@pytest.mark.anyio
+async def test_synthesize_single_stream_yields_pcm_chunks() -> None:
+    pcm_chunk_1 = b"\x01\x02\x03\x04"
+    pcm_chunk_2 = b"\x05\x06\x07\x08"
+
+    sse_body = "\n".join([
+        _make_sse_chunk(pcm_chunk_1),
+        "",
+        _make_sse_chunk(pcm_chunk_2),
+        "data: [DONE]",
+    ]) + "\n"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read().decode("utf-8"))
+        assert body["stream"] is True
+        assert body["audio"]["format"] == "pcm16"
+        return httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    service = make_service(transport=httpx.MockTransport(handler))
+    payload = SynthesisRequest(mode="preset", text="你好", voice="冰糖")
+
+    chunks = []
+    async for chunk in service._synthesize_single_stream(payload):
+        chunks.append(chunk)
+
+    assert chunks == [pcm_chunk_1, pcm_chunk_2]
+
+
+@pytest.mark.anyio
+async def test_synthesize_stream_yields_pcm_chunks() -> None:
+    pcm_data = b"\x01\x02\x03\x04"
+    sse_body = _make_sse_chunk(pcm_data) + "\ndata: [DONE]\n"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    service = make_service(transport=httpx.MockTransport(handler))
+    payload = SynthesisRequest(mode="preset", text="你好", voice="冰糖")
+
+    chunks = []
+    async for chunk in service.synthesize_stream(payload):
+        chunks.append(chunk)
+
+    assert chunks == [pcm_data]
+
+
+@pytest.mark.anyio
+async def test_synthesize_stream_inserts_silence_between_segments() -> None:
+    pcm_data = b"\x01\x02\x03\x04"
+    sse_body = _make_sse_chunk(pcm_data) + "\ndata: [DONE]\n"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    service = make_service(
+        transport=httpx.MockTransport(handler),
+        tts_segment_max_chars=50,
+        tts_segment_pause_ms=50,
+    )
+    payload = SynthesisRequest(
+        mode="preset",
+        text="第一段内容确实比较长，需要完整保留语义和句号才能被正确分段。第二段内容也确实比较长，需要独立请求后再合并为最终音频。",
+        voice="冰糖",
+    )
+
+    chunks = []
+    async for chunk in service.synthesize_stream(payload):
+        chunks.append(chunk)
+
+    # Should have: pcm_data + silence + pcm_data (2 segments with pause)
+    assert len(chunks) == 3
+    assert chunks[0] == pcm_data
+    assert chunks[1] == MimoTtsService._generate_silence_pcm(50, sample_rate=24000)
+    assert chunks[2] == pcm_data
+
+
+def test_synthesis_request_stream_default_false() -> None:
+    payload = SynthesisRequest(mode="preset", text="你好", voice="冰糖")
+    assert payload.stream is False
+
+
+def test_synthesis_request_stream_true() -> None:
+    payload = SynthesisRequest(mode="preset", text="你好", voice="冰糖", stream=True)
+    assert payload.stream is True
+
+
+def test_sse_endpoint_returns_sse_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    pcm_data = b"\x01\x02\x03\x04"
+    sse_body = _make_sse_chunk(pcm_data) + "\ndata: [DONE]\n"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    mock_transport = httpx.MockTransport(handler)
+    original_init = MimoTtsService.__init__
+
+    def patched_init(self, settings, transport=None):
+        original_init(self, settings, transport=mock_transport)
+
+    app_config.get_settings.cache_clear()
+    monkeypatch.setattr(app_main, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(MimoTtsService, "__init__", patched_init)
+    app = create_app()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/speech/synthesize",
+            json={"mode": "preset", "text": "你好", "voice": "冰糖", "stream": True},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+
+    text = response.text
+    assert "data:" in text
+    assert "[DONE]" in text
+    expected_b64 = base64.b64encode(pcm_data).decode()
+    assert expected_b64 in text
+
+    app_config.get_settings.cache_clear()
+
+
+def test_websocket_synthesize_uses_streaming(monkeypatch: pytest.MonkeyPatch) -> None:
+    pcm_chunk = b"\x01\x02\x03\x04" * 100  # some PCM data
+
+    async def fake_synthesize_stream(self, payload: SynthesisRequest):
+        assert payload.mode == SynthesisMode.PRESET
+        assert payload.voice == "冰糖"
+        assert payload.text == "你好，流式测试。"
+        yield pcm_chunk
+
+    app_config.get_settings.cache_clear()
+    monkeypatch.setattr(app_main, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(MimoTtsService, "synthesize_stream", fake_synthesize_stream)
+    app = create_app()
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/virtualhuman/speech/synthesis/1103") as websocket:
+            assert websocket.receive_text() == "connect-success"
+            websocket.send_text("你好，流式测试。")
+
+            audio_chunk = websocket.receive_bytes()
+            assert audio_chunk
+            # Should be resampled from 24kHz to 16kHz (roughly 2/3 the size)
+            expected_len = round(len(pcm_chunk) * 16000 / 24000)
+            # Allow small rounding tolerance from audioop.ratecv
+            assert abs(len(audio_chunk) - expected_len) <= 4
+            assert len(audio_chunk) > 0
 
     app_config.get_settings.cache_clear()

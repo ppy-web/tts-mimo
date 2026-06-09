@@ -1,11 +1,13 @@
 import asyncio
+import audioop
+import base64
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -218,6 +220,10 @@ def create_app() -> FastAPI:
     )
     async def synthesize(payload: SynthesisRequest) -> Response:
         service: MimoTtsService = app.state.mimo_tts
+
+        if payload.stream:
+            return await _handle_stream_synthesis(service, payload)
+
         try:
             audio_bytes = await service.synthesize(payload)
         except MimoTtsError as exc:
@@ -227,6 +233,32 @@ def create_app() -> FastAPI:
 
         headers = service.build_download_headers()
         return Response(content=audio_bytes, media_type="audio/wav", headers=headers)
+
+    async def _handle_stream_synthesis(
+        service: MimoTtsService,
+        payload: SynthesisRequest,
+    ) -> StreamingResponse:
+        async def event_generator():
+            try:
+                async for pcm_chunk in service.synthesize_stream(payload):
+                    chunk_b64 = base64.b64encode(pcm_chunk).decode("ascii")
+                    sse_data = json.dumps({"audio": chunk_b64})
+                    yield f"data: {sse_data}\n\n"
+                yield "data: [DONE]\n\n"
+            except MimoTtsError as exc:
+                error_data = json.dumps({"error": str(exc)})
+                yield f"data: {error_data}\n\n"
+                yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.websocket("/virtualhuman/speech/synthesis/1103")
     async def websocket_synthesize(websocket: WebSocket) -> None:
@@ -267,8 +299,18 @@ def create_app() -> FastAPI:
                             text=speech_text,
                             overrides=overrides,
                         )
-                        wav_bytes = await service.synthesize(payload)
-                        pcm_bytes = service.wav_to_pcm_s16le_mono_16k(wav_bytes)
+                        resample_state = None
+                        async for pcm_chunk_24k in service.synthesize_stream(payload):
+                            pcm_chunk_16k, resample_state = audioop.ratecv(
+                                pcm_chunk_24k,
+                                2,
+                                1,
+                                service.STREAM_PCM16_SAMPLE_RATE,
+                                16000,
+                                resample_state,
+                            )
+                            await _send_bytes_safely(websocket, send_lock, pcm_chunk_16k)
+                            await asyncio.sleep(0)
                     except (MimoTtsError, ValidationError) as exc:
                         await _send_text_safely(
                             websocket,
@@ -276,14 +318,6 @@ def create_app() -> FastAPI:
                             f"data=error message={exc}",
                         )
                         continue
-
-                    for chunk in service.iter_pcm_chunks(
-                        pcm_bytes,
-                        settings.tts_ws_chunk_duration_ms,
-                    ):
-                        await _send_bytes_safely(websocket, send_lock, chunk)
-                        await asyncio.sleep(0)
-                    continue
 
                 if bytes_message is not None:
                     if bytes_message in (b"", b"ping"):

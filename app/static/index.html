@@ -230,6 +230,17 @@
                 <button type="button" data-tag="(唱歌)">唱歌</button>
               </div>
             </div>
+
+            <label class="field stream-toggle-field" for="stream-toggle">
+              <input id="stream-toggle" type="checkbox" />
+              <span class="stream-toggle-copy">
+                <span class="stream-toggle-title">流式输出（SSE）</span>
+                <span class="field-hint">启用后通过 Server-Sent Events 逐步接收 PCM16 音频并实时播放</span>
+              </span>
+              <span class="stream-switch" aria-hidden="true">
+                <span class="stream-switch-thumb"></span>
+              </span>
+            </label>
           </section>
 
           <aside class="console-card">

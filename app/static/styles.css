@@ -244,6 +244,109 @@ body {
   margin-bottom: 16px;
 }
 
+.field-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.stream-toggle-field {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-field);
+  background: #11171b;
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.stream-toggle-field:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+}
+
+.stream-toggle-field input[type="checkbox"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.stream-toggle-field:has(input[type="checkbox"]:focus-visible) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(73, 199, 184, 0.15);
+}
+
+.stream-toggle-field:has(input[type="checkbox"]:checked) {
+  border-color: rgba(73, 199, 184, 0.45);
+  background: rgba(73, 199, 184, 0.08);
+}
+
+.stream-toggle-copy {
+  min-width: 0;
+}
+
+.stream-toggle-title {
+  display: block;
+}
+
+.stream-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 26px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.stream-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition:
+    background 0.18s ease,
+    transform 0.18s ease;
+}
+
+.stream-toggle-field:has(input[type="checkbox"]:checked) .stream-switch {
+  border-color: rgba(73, 199, 184, 0.6);
+  background: rgba(73, 199, 184, 0.22);
+}
+
+.stream-toggle-field:has(input[type="checkbox"]:checked) .stream-switch-thumb {
+  background: var(--accent);
+  transform: translateX(20px);
+}
+
+.field-hint {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .field span {
   color: var(--text);
   font-size: 14px;

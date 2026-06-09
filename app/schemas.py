@@ -60,6 +60,7 @@ class SynthesisRequest(BaseModel):
         default=None,
         description="音色复刻样本，格式为 data:audio/{mpeg|mp3|wav};base64,...",
     )
+    stream: bool = Field(default=False, description="是否使用流式输出（SSE）")
 
     @field_validator("voice_clone_audio")
     @classmethod
