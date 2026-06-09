@@ -1,7 +1,9 @@
 .venv/
 .codegraph/
 .playwright-mcp/
-.reasonix/
 
 .env
 __pycache__/
+
+desktop-topic-title-sources.json
+desktop-topic-titles.json
